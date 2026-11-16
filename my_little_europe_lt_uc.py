@@ -1,0 +1,530 @@
+import ctypes
+import os
+import sys
+
+
+def _preload_highspy_native_library():
+    """
+    Pre-load highspy's bundled C++ shared library (libhighs.so) into the global symbol table
+    (RTLD_GLOBAL) before any extension (or scipy/ortools) is loaded.
+    This resolves the 'undefined symbol: _ZN5Highs13releaseMemoryEv' dynamic linking conflict on Linux.
+    """
+    search_paths = list(sys.path)
+    try:
+        import site
+        if hasattr(site, "getsitepackages"):
+            search_paths.extend(site.getsitepackages())
+        if hasattr(site, "getusersitepackages"):
+            search_paths.append(site.getusersitepackages())
+    except Exception:
+        pass
+
+    for p in search_paths:
+        if not isinstance(p, str) or not os.path.isdir(p):
+            continue
+        highspy_dir = os.path.join(p, "highspy")
+        if not os.path.isdir(highspy_dir):
+            continue
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(highspy_dir)
+            except Exception:
+                pass
+        for lib_name in ("libhighs.so.1", "libhighs.so.1.15.1", "libhighs.so", "libhighs.1.dylib", "libhighs.dylib"):
+            lib_path = os.path.join(highspy_dir, lib_name)
+            if os.path.isfile(lib_path):
+                try:
+                    ctypes.CDLL(lib_path, mode=ctypes.RTLD_GLOBAL)
+                    break
+                except Exception:
+                    pass
+
+
+_preload_highspy_native_library()
+
+try:
+    import highspy  # noqa: F401
+except ImportError:
+    pass
+
+import logging
+import os.path
+from typing import Dict, Tuple, List, Optional
+
+import pandas as pd
+import time
+from datetime import datetime
+
+from src.common.constants.datadims import DataDimensions
+from src.common.constants.extract_eraa_data import ERAADatasetDescr
+from src.common.constants.optimisation import OPTIM_RESOL_STATUS, DEFAULT_OPTIM_SOLVER_PARAMS, SolverParams, \
+    CustomConstraintNames
+from src.common.constants.plots import PlotNames, PER_COUNTRY_PLOT
+from src.common.constants.usage_params_json import EnvPhaseNames
+from src.common.error_msgs import infeas_debugging_hints_msg
+from src.common.fuel_sources import set_fuel_sources_from_raw_params_json, DUMMY_FUEL_SOURCES, FuelSource, \
+    update_fuel_sources, get_fuel_sources_with_set_marg_cost, reset_fuel_sources_marginal_costs
+from src.common.logger import init_logger, stop_logger, deactivate_verbose_warnings, TITLE_LOG_SEP
+from src.common.long_term_uc_io import (
+    set_full_lt_uc_output_folder,
+    get_demand_adder_files,
+    get_preprocessed_hydro_levels_file,
+)
+from src.common.plot_params import PlotParamsKeysInJson
+from src.common.uc_run_params import UCRunParams
+from src.include.dataset import Dataset
+from src.include.dataset_builder import PypsaModel, PYPSA_RESULT_TYPE
+from src.include.uc_postprocessing import UCSummaryMetrics
+from src.include_runner.overwrite_uc_run_params import apply_fixed_uc_run_params
+from src.utils.basic_utils import print_non_default
+from src.utils.dates import get_period_str
+from src.utils.read import (read_and_check_uc_run_params, read_and_check_pypsa_static_params,
+                            read_given_phase_specific_key_from_plot_params,
+                            read_plot_params, read_usage_params, read_solver_params)
+
+
+def get_needed_eraa_data(uc_run_params: UCRunParams, eraa_data_descr: ERAADatasetDescr, fuel_sources: list[FuelSource],
+                         debug_mode: bool = False, debug_output_folder: str = None,
+                         get_optional_const_from_data_folder: Dict[str, bool] = None) \
+        -> Dataset:
+    """
+    Get ERAA data which is needed for current UC simulation; extracted from the data folder of this project
+    :param uc_run_params
+    :param eraa_data_descr
+    :param fuel_sources: to update marginal cost values; if None no update
+    :param debug_mode: to save some intermediate data in (JSON) files to more easily debug
+    :param debug_output_folder: in which intermediate data must be saved
+    :param get_optional_const_from_data_folder: get optional constraint parameters from ERAA data folder? Alternatively
+    read from input folder - in which students can make modifications. This property is specified per optional
+    constraint names
+    """
+    logging.info(f'{TITLE_LOG_SEP} II)1) Read needed ERAA ({eraa_data_descr.eraa_edition}) data {TITLE_LOG_SEP}')
+    uc_period_msg = get_period_str(period_start=uc_run_params.uc_period_start,
+                                   period_end=uc_run_params.uc_period_end)
+    logging.info(f'For year (resp. climatic year) {uc_run_params.selected_target_year} '
+                 f'(resp. {uc_run_params.selected_climatic_year}) and period {uc_period_msg}')
+    # initialize dataset object
+    eraa_dataset = Dataset(source=f'eraa_{eraa_data_descr.eraa_edition}',
+                           agg_prod_types_with_cf_data=eraa_data_descr.agg_prod_types_with_cf_data,
+                           is_stress_test=uc_run_params.is_stress_test,
+                           get_optional_const_from_data_folder=get_optional_const_from_data_folder)
+
+    eraa_dataset.get_countries_data(uc_run_params=uc_run_params,
+                                    aggreg_prod_types_def=eraa_data_descr.aggreg_prod_types_def)
+    eraa_dataset.complete_data()
+
+    # apply demand adder, if data available for that
+    if len(uc_run_params.demand_adder_files) > 0:
+        eraa_dataset.apply_demand_adder(files=uc_run_params.demand_adder_files,
+                                        selected_climatic_year=uc_run_params.selected_climatic_year,
+                                        uc_period=(uc_run_params.uc_period_start, uc_run_params.uc_period_end))
+
+    logging.info(f'{TITLE_LOG_SEP} II)2) Check data coherence {TITLE_LOG_SEP}')
+    logging.info('Get generation units data, from both ERAA data - read just before '
+                 '- and complementary JSON parameter files')
+    (eraa_dataset
+     .get_generation_units_data(uc_run_params=uc_run_params,
+                                pypsa_unit_params_per_agg_pt=eraa_data_descr.pypsa_unit_params_per_agg_pt,
+                                units_complem_params_per_agg_pt=eraa_data_descr.units_complem_params_per_agg_pt)
+     )
+
+    fuel_sources_with_modif_marg_cost = get_fuel_sources_with_set_marg_cost(fuel_sources)
+    if len(fuel_sources_with_modif_marg_cost) > 0:
+        eraa_dataset.update_gen_units_marginal_costs(fuel_sources=fuel_sources_with_modif_marg_cost)
+
+    # apply init SoC from values set in European JSON file to be modified
+    if len(uc_run_params.state_of_charge_init_pu) > 0:
+        eraa_dataset.apply_init_soc_values(per_prod_unit_init_soc=uc_run_params.state_of_charge_init_pu)
+
+    # set 'committable' attribute to False, i.e. no 'dynamic constraints' modeled in the considered modeled
+    eraa_dataset.set_committable_param_to_false()
+
+    if debug_mode:
+        gen_units_data_json = os.path.join(debug_output_folder, 'pypsa_gen_units_data.json')
+        eraa_dataset.dump_gen_units_data_to_json(filepath=gen_units_data_json)
+
+    return eraa_dataset
+
+
+def check_min_pypsa_params_provided(eraa_dataset: Dataset):
+    logging.info('Check that "minimal" PyPSA parameters for unit creation have been provided '
+                 '(in JSON files) / read (from ERAA data)')
+    pypsa_static_params = read_and_check_pypsa_static_params()
+    eraa_dataset.control_min_pypsa_params_per_gen_units(
+        pypsa_min_unit_params_per_agg_pt=pypsa_static_params.min_unit_params_per_agg_pt)
+
+
+def create_pypsa_network_model(name: str, uc_run_params: UCRunParams, eraa_dataset: Dataset,
+                               zones_gps_coords: Dict[str, Tuple[float, float]],
+                               fuel_sources: Dict[str, FuelSource]) -> PypsaModel:
+    """
+    Create PyPSA network model
+    :param name
+    :param uc_run_params
+    :param eraa_dataset
+    :param zones_gps_coords: only for network figure
+    :param fuel_sources
+    """
+    logging.info(f'{TITLE_LOG_SEP} III) Create PyPSA UC model {TITLE_LOG_SEP}')
+    pypsa_model = PypsaModel(name=name)
+    date_idx = eraa_dataset.demand[uc_run_params.selected_countries[0]].index
+    end_year = uc_run_params.selected_target_year + (
+            uc_run_params.uc_period_end.year - uc_run_params.uc_period_start.year
+    )
+    horizon = pd.date_range(
+        start=uc_run_params.uc_period_start.replace(year=uc_run_params.selected_target_year),
+        end=uc_run_params.uc_period_end.replace(year=end_year),
+        freq='h'
+    )
+    pypsa_model.init_pypsa_network(date_idx=date_idx, date_range=horizon)
+    # add GPS coordinates
+    selec_countries_gps_coords = \
+        {country: gps_coords for country, gps_coords in zones_gps_coords.items()
+         if country in uc_run_params.selected_countries}
+    pypsa_model.add_gps_coordinates(countries_gps_coords=selec_countries_gps_coords)
+    fuel_sources |= DUMMY_FUEL_SOURCES
+    pypsa_model.add_energy_carriers(fuel_sources=fuel_sources)
+    pypsa_model.add_generators(generators_data=eraa_dataset.generation_units_data)
+    if not uc_run_params.co2_emis_price == 0:
+        pypsa_model.add_co2_cost_to_generators(co2_price=uc_run_params.co2_emis_price)
+    pypsa_model.add_loads(demand=eraa_dataset.demand)
+    pypsa_model.add_interco_links(countries=uc_run_params.selected_countries, interco_capas=eraa_dataset.interco_capas)
+    # Set to True if any considered country with constraining SoC min/SoC max const.
+    # on hydro reservoirs; False otherwise
+    with_hydro_extr_level_const = eraa_dataset.check_if_any_hydro_extr_level_const()
+    with_hydro_gen_level_const = eraa_dataset.check_if_any_hydro_gen_level_const()
+    with_hydro_custom_const = with_hydro_extr_level_const or with_hydro_gen_level_const
+    with_sum_of_prod_custom_const = len(uc_run_params.sum_prod_constraints) > 0
+    if with_hydro_custom_const or with_sum_of_prod_custom_const:
+        pypsa_model.build_model_before_adding_custom_const()  # call PyPSA optimize method before adding custom const.
+    if with_hydro_extr_level_const:
+        # get reservoir extreme generation and level values, as well as energy capacities
+        # (to see if constraints will be useless)
+        hydro_soc_min_pu, hydro_soc_max_pu, hydro_e_capa = eraa_dataset.get_hydro_params_for_extr_levels_const()
+        pypsa_model.add_hydro_extreme_levels_constraint(soc_min_pu=hydro_soc_min_pu, soc_max_pu=hydro_soc_max_pu,
+                                                        energy_capa=hydro_e_capa)
+    if with_hydro_gen_level_const:
+        hydro_gen_min, hydro_gen_max, hydro_p_capa = eraa_dataset.get_hydro_params_for_gen_levels_const()
+        pypsa_model.add_hydro_extreme_gen_constraint(generation_min=hydro_gen_min, generation_max=hydro_gen_max,
+                                                     power_capa=hydro_p_capa)
+    if with_sum_of_prod_custom_const:
+        for sum_prod_const in uc_run_params.sum_prod_constraints:
+            pypsa_model.add_sum_of_prod_custom_const(prod_sum_const=sum_prod_const)
+    logging.info(f'PyPSA network main properties: {pypsa_model.network}\n{pypsa_model.network_summary_for_log()}')
+    # plot network  
+    # name of current "phase" (of the course), the one associated to this script:
+    # a multi-zone (Eur.) Unit Commitment model
+    phase_name = EnvPhaseNames.multizones_uc_model
+    fig_style = (
+        read_given_phase_specific_key_from_plot_params(phase_name=phase_name,
+                                                       param_to_be_set=PlotParamsKeysInJson.fig_style)
+    )
+    print_non_default(obj=fig_style, obj_name=f'FigureStyle - for phase {phase_name}', log_level='debug')
+    pypsa_model.plot_network(toy_model_output=False, output_tag=uc_run_params.output_tag)
+    return pypsa_model
+
+
+def solve_pypsa_network_model(pypsa_model: PypsaModel, year: int, n_countries: int, uc_period_start: datetime,
+                              solver_params: SolverParams = DEFAULT_OPTIM_SOLVER_PARAMS, output_tag: str = None,
+                              save_explicit_corresp_for_lp_elts: bool = False) -> PYPSA_RESULT_TYPE:
+    """
+    Solve PyPSA network (UC) model, using an optimisation solver
+    :param pypsa_model: to be solved
+    :param year: of considered UC pb
+    :param n_countries: in the considered network
+    :param uc_period_start: date of the beginning of UC pb
+    :param solver_params: name/license file, if not default solver (highs) used
+    :param output_tag: used to have a more explicit output folder arborescence
+    :param save_explicit_corresp_for_lp_elts: save files with correspondence between PyPSA "abstract"
+    variable/constraint names and explicit ones?
+    :returns (xxx, optim status)
+    """
+    logging.info(f'{TITLE_LOG_SEP} IV) Get a solution for European UC model {TITLE_LOG_SEP}')
+    # use alternatively set_optim_solver(name='gurobi', license_file='gurobi.lic') to use Gurobi,
+    # with gurobi.lic file provided at root of this project (see readme.md on procedure to obtain such a lic file)
+    pypsa_model.set_optim_solver(solver_params=solver_params)
+    result = pypsa_model.optimize_network(year=year, n_countries=n_countries, period_start=uc_period_start,
+                                          output_tag=output_tag,
+                                          save_explicit_vars_corresp=save_explicit_corresp_for_lp_elts,
+                                          save_explicit_consts_corresp=save_explicit_corresp_for_lp_elts)
+    # Get optim. pb main characteristics (to check if coherent with resolution time?!)
+    optim_pb_characts = pypsa_model.get_optim_pb_characteristics()
+    logging.info(f'Corresponding to solved {str(optim_pb_characts)}')
+    return result
+
+
+def save_data_and_fig_results(pypsa_model: PypsaModel, uc_run_params: UCRunParams,
+                              result_optim_status: str) -> Optional[UCSummaryMetrics]:
+    logging.info(f'{TITLE_LOG_SEP} V) Save data - at the optimum of UC problem - and plot graphs {TITLE_LOG_SEP}')
+
+    # Save preprocessed hydro bounds to CSV if present (available even in case of infeasibility for inspection)
+    if pypsa_model.preprocessed_hydro_soc_min_pu is not None:
+        preprocessed_hydro_file = get_preprocessed_hydro_levels_file(
+            year=uc_run_params.selected_target_year,
+            climatic_year=uc_run_params.selected_climatic_year,
+            start_horizon=uc_run_params.uc_period_start,
+            output_tag=uc_run_params.output_tag
+        )
+        pypsa_model.save_preprocessed_hydro_bounds_to_csv(output_filepath=preprocessed_hydro_file)
+
+    pypsa_opt_resol_status = OPTIM_RESOL_STATUS.optimal
+    # if optimal resolution status, save output data and plot associated figures
+    if result_optim_status == pypsa_opt_resol_status:
+        # get objective value, and associated optimal decisions / dual variables
+        objective_value = pypsa_model.get_opt_value(pypsa_resol_status=pypsa_opt_resol_status)
+        uc_optimal_solution = pypsa_model.set_uc_opt_solution()
+        # get plot parameters associated to aggreg. production types
+        per_dim_plot_params = read_plot_params()
+        plots_tb_done = (
+            read_given_phase_specific_key_from_plot_params(phase_name=EnvPhaseNames.multizones_uc_model,
+                                                           param_to_be_set=PlotParamsKeysInJson.plots_tb_done)
+        )
+        plot_params_agg_pt = per_dim_plot_params[DataDimensions.agg_prod_type]
+        plot_params_zone = per_dim_plot_params[DataDimensions.zone]
+
+        # plot - first the ones per country
+        per_country_elts_plot = [elt for elt in PER_COUNTRY_PLOT if elt in plots_tb_done]
+        logging.info(f"Per country, plot {', '.join(per_country_elts_plot)}")
+        for country in uc_run_params.selected_countries:
+            # opt. prod profiles 'stacked'
+            if PlotNames.prod_stacked in plots_tb_done:
+                (uc_optimal_solution.plot_prod(plot_params_agg_pt=plot_params_agg_pt, country=country,
+                                               year=uc_run_params.selected_target_year,
+                                               climatic_year=uc_run_params.selected_climatic_year,
+                                               start_horizon=uc_run_params.uc_period_start,
+                                               output_tag=uc_run_params.output_tag)
+                 )
+            # idem, including stock-like prod units (both cons. and prod.) on the stack of curves
+            if PlotNames.prod_stacked_with_stock in plots_tb_done:
+                uc_optimal_solution.plot_prod(plot_params_agg_pt=plot_params_agg_pt, country=country,
+                                              year=uc_run_params.selected_target_year,
+                                              climatic_year=uc_run_params.selected_climatic_year,
+                                              start_horizon=uc_run_params.uc_period_start,
+                                              include_storage=True, output_tag=uc_run_params.output_tag)
+            # flow in the links
+            if PlotNames.link_flows in plots_tb_done:
+                (uc_optimal_solution.plot_link_flows(origin_country=country, year=uc_run_params.selected_target_year,
+                                                     climatic_year=uc_run_params.selected_climatic_year,
+                                                     start_horizon=uc_run_params.uc_period_start,
+                                                     output_tag=uc_run_params.output_tag)
+                 )
+            if PlotNames.stock_soc in plots_tb_done:
+                hydro_soc_min = (
+                    pypsa_model.get_constraint_bound_value(constraint_name=CustomConstraintNames.hydro_soc_min)
+                )
+                hydro_soc_max = (
+                    pypsa_model.get_constraint_bound_value(constraint_name=CustomConstraintNames.hydro_soc_max)
+                )
+                storage_const_soc_max = pypsa_model.get_storage_constant_soc_max()
+                uc_optimal_solution.plot_stock_soc(plot_params_agg_pt=plot_params_agg_pt, country=country,
+                                                   year=uc_run_params.selected_target_year,
+                                                   climatic_year=uc_run_params.selected_climatic_year,
+                                                   start_horizon=uc_run_params.uc_period_start,
+                                                   storage_const_soc_max=storage_const_soc_max,
+                                                   hydro_soc_min=hydro_soc_min, hydro_soc_max=hydro_soc_max,
+                                                   output_tag=uc_run_params.output_tag,
+                                                   plot_in_pu=uc_run_params.plot_stock_soc_in_pu)
+
+        # then plots at the scale of all countries (Europe)
+        # 'marginal price' figure
+        if PlotNames.marginal_price in plots_tb_done:
+            (uc_optimal_solution.plot_marginal_price(plot_params_zone=plot_params_zone,
+                                                     year=uc_run_params.selected_target_year,
+                                                     climatic_year=uc_run_params.selected_climatic_year,
+                                                     start_horizon=uc_run_params.uc_period_start,
+                                                     output_tag=uc_run_params.output_tag)
+             )
+
+        # summary of links saturation
+        if uc_run_params.plot_link_capa_saturation and PlotNames.link_capa_saturation in plots_tb_done:
+            link_capas = pypsa_model.get_link_capacities()
+            uc_optimal_solution.plot_link_capa_saturation(link_capacities=link_capas,
+                                                          year=uc_run_params.selected_target_year,
+                                                          climatic_year=uc_run_params.selected_climatic_year,
+                                                          start_horizon=uc_run_params.uc_period_start,
+                                                          output_tag=uc_run_params.output_tag)
+
+        # save optimal prod. decision to an output file
+        (uc_optimal_solution.save_decisions_to_csv(year=uc_run_params.selected_target_year,
+                                                   climatic_year=uc_run_params.selected_climatic_year,
+                                                   start_horizon=uc_run_params.uc_period_start,
+                                                   output_tag=uc_run_params.output_tag)
+         )
+
+        # save marginal prices to an output file
+        (uc_optimal_solution.save_marginal_prices_to_csv(year=uc_run_params.selected_target_year,
+                                                         climatic_year=uc_run_params.selected_climatic_year,
+                                                         start_horizon=uc_run_params.uc_period_start,
+                                                         output_tag=uc_run_params.output_tag)
+         )
+        # link capacity dual variables
+        if uc_run_params.save_link_capa_dual_vars:
+            uc_optimal_solution.save_link_capa_dual_vars_to_csv(year=uc_run_params.selected_target_year,
+                                                                climatic_year=uc_run_params.selected_climatic_year,
+                                                                start_horizon=uc_run_params.uc_period_start,
+                                                                snapshots=pypsa_model.network.snapshots,
+                                                                output_tag=uc_run_params.output_tag)
+        # custom constraints dual variables, e.g. for max on CO2 emissions
+        if uc_run_params.save_custom_const_dual_vars:
+            uc_optimal_solution.save_custom_const_dual_vars_to_csv(year=uc_run_params.selected_target_year,
+                                                                   climatic_year=uc_run_params.selected_climatic_year,
+                                                                   start_horizon=uc_run_params.uc_period_start,
+                                                                   output_tag=uc_run_params.output_tag)
+
+        # set UC summary metrics (Energy Not Served, number of failure hours, costs)
+        uc_summary_metrics = (
+            uc_optimal_solution.set_uc_summary_metrics(network=pypsa_model.network, total_cost=objective_value,
+                                                       failure_penalty=uc_run_params.failure_penalty)
+        )
+        uc_summary_metrics.json_dump(year=uc_run_params.selected_target_year,
+                                     climatic_year=uc_run_params.selected_climatic_year,
+                                     start_horizon=uc_run_params.uc_period_start,
+                                     output_tag=uc_run_params.output_tag)
+        return uc_summary_metrics
+    else:
+        logging.info(f'Optimisation resolution status is not {pypsa_opt_resol_status} '
+                     f'-> output data (resp. figures) cannot be saved (resp. plotted), '
+                     f'and None UCSummaryMetrics returned')
+        per_bus_total_capa = pypsa_model.get_per_bus_total_installed_capa()
+        per_bus_max_load = pypsa_model.get_per_bus_max_load()
+        infeas_debug_hints_msg = infeas_debugging_hints_msg(total_capa=per_bus_total_capa, max_load=per_bus_max_load)
+        logging.info(infeas_debug_hints_msg)
+        return None
+
+
+def run(network_name: str = 'my little europe', solver_params: SolverParams = None,
+        fixed_uc_run_params: UCRunParams = None, fixed_run_params_fields: List[str] = None, extra_params: dict = None,
+        json_params_filepath: str = None):
+    """
+    Run N-zones European Unit Commitment model
+    :param network_name: just to set associated attribute in PyPSA network
+    :param solver_params: optimisation solver name/license_file; the latter must be at root of this project
+    :param fixed_uc_run_params: to impose some values of UCRunParams attributes when running this function;
+    it will overwrite the values in input JSON files
+    :param fixed_run_params_fields: list of fields to be overwritten
+    :param extra_params: dict to gather some additional parameters for dev. usage / debug
+        - log_level: it will overwrite the one defined in usage parameters JSON file
+        - debug_mode: activated to save some intermediate data/results in (JSON) output files
+    to more easily debug the code
+    :param json_params_filepath: path to the JSON file containing parameters defining Europe configuration (prod.
+    capacities, interconnection ones...). If None, default path - to the file to be modified by the students -
+    will be used
+    """
+    if extra_params is None:
+        extra_params = {}
+
+    run_start = time.time()
+    output_folder = set_full_lt_uc_output_folder()
+
+    # deactivate some annoying and useless warnings in pypsa/pandas
+    deactivate_verbose_warnings()
+
+    # read code environment "usage" parameters
+    usage_params = read_usage_params()
+    if 'log_level' not in extra_params:
+        log_level = usage_params.log_level
+    else:
+        log_level = extra_params['log_level']
+
+    logger = init_logger(logger_dir=output_folder, logger_name='eraa_lt_uc_pb.log', log_level=log_level)
+    logging.info(f'Start ERAA-PyPSA long-term European Unit Commitment (UC) simulation for network: {network_name}')
+
+    logging.info(f'{TITLE_LOG_SEP} I) Read UC run parameters - from European and per-countries JSON input '
+                 f'files {TITLE_LOG_SEP}')
+
+    # set fuel sources objects from JSON
+    fuel_sources = set_fuel_sources_from_raw_params_json()
+
+    eraa_data_descr, uc_run_params = (
+        read_and_check_uc_run_params(phase_name=EnvPhaseNames.multizones_uc_model, usage_params=usage_params,
+                                     json_params_filepath=json_params_filepath)
+    )
+
+    # for following logs to be adapted to team name
+    if uc_run_params.team is not None:
+        network_name = uc_run_params.team
+
+    if fixed_uc_run_params is not None:
+        uc_run_params = (
+            apply_fixed_uc_run_params(uc_run_params=uc_run_params, fixed_uc_run_params=fixed_uc_run_params,
+                                      eraa_data_descr=eraa_data_descr, fixed_run_params_fields=fixed_run_params_fields)
+        )
+
+    # set per country target year to be used for prod. capa data read hereafter
+    uc_run_params.set_target_years_for_capa_data(
+        use_first_year_capas_as_default=usage_params.use_first_year_capas_as_default,
+        init_target_year=min(eraa_data_descr.available_target_years))
+
+    # remove init SoC values if functionality to apply these values not activated in usage parameters
+    if not usage_params.apply_per_prod_unit_init_soc:
+        uc_run_params.empty_per_prod_unit_init_soc()
+
+    # Get needed data (demand, RES Capa. Factors, installed generation capacities)
+    if 'debug_mode' in extra_params:
+        debug_mode = extra_params['debug_mode']
+    else:
+        debug_mode = False
+
+    # update fuel sources marginal cost and CO2 emission values from values read in
+    # input/long_term_uc/fuel_sources_to-be_modif.json
+    if uc_run_params.updated_fuel_sources_params is not None:
+        fuel_sources = update_fuel_sources(fuel_sources=fuel_sources,
+                                           updated_params=uc_run_params.updated_fuel_sources_params)
+
+    # obtain demand adder files
+    if usage_params.manually_adding_demand and uc_run_params.use_demand_adder_files:
+        demand_adder_files = get_demand_adder_files(target_year=uc_run_params.selected_target_year,
+                                                    countries=uc_run_params.selected_countries)
+        uc_run_params.set_demand_adder_files(demand_adder_files)
+    else:
+        uc_run_params.demand_adder_files = []
+
+    logging.info(f'{TITLE_LOG_SEP} II) Get data for UC model {TITLE_LOG_SEP}')
+
+    eraa_dataset = get_needed_eraa_data(uc_run_params=uc_run_params, eraa_data_descr=eraa_data_descr,
+                                        fuel_sources=fuel_sources, debug_mode=debug_mode,
+                                        debug_output_folder=output_folder,
+                                        get_optional_const_from_data_folder=
+                                        usage_params.get_optional_const_from_data_folder)
+
+    # updated marginal costs values have been modified in generation units data, and will be associated to generators
+    # in PyPSA modelling; for clarity reset this attribute to None in fuel sources - from which only CO2 emissions
+    # values will be set (to carriers)
+    fuel_sources = reset_fuel_sources_marginal_costs(fuel_sources)
+
+    # and check that minimal parameters needed for model creation have been provided
+    # -> to avoid 'obscure crash' hereafter
+    check_min_pypsa_params_provided(eraa_dataset=eraa_dataset)
+
+    # create PyPSA network
+    uc_run_params.process_output_tag(date_tag=datetime.fromtimestamp(run_start), output_folder=output_folder)
+    pypsa_model = create_pypsa_network_model(name=network_name, uc_run_params=uc_run_params, eraa_dataset=eraa_dataset,
+                                             zones_gps_coords=eraa_data_descr.gps_coordinates,
+                                             fuel_sources=fuel_sources)
+
+    # get solver params from JSON file if not provided in arg of this function
+    if solver_params is None:
+        solver_params = read_solver_params()
+    result = solve_pypsa_network_model(pypsa_model=pypsa_model, year=uc_run_params.selected_target_year,
+                                       n_countries=len(uc_run_params.selected_countries),
+                                       uc_period_start=uc_run_params.uc_period_start, solver_params=solver_params,
+                                       output_tag=uc_run_params.output_tag,
+                                       save_explicit_corresp_for_lp_elts=
+                                       uc_run_params.save_explicit_corresp_for_lp_elts)
+
+    uc_summary_metrics = save_data_and_fig_results(pypsa_model=pypsa_model, uc_run_params=uc_run_params,
+                                                   result_optim_status=result[1])
+
+    run_end = time.time()
+
+    run_complem_msg = f" for network {network_name}"
+    if uc_run_params.output_tag is not None:
+        run_complem_msg += f", with output tag {uc_run_params.output_tag}"
+    logging.info(f'{TITLE_LOG_SEP} THE END of ERAA-PyPSA long-term UC simulation{run_complem_msg}! '
+                 f'(after {run_end - run_start:.2f}s) {TITLE_LOG_SEP}:\n{str(uc_summary_metrics)}')
+    stop_logger()
+    return uc_summary_metrics
+
+
+if __name__ == '__main__':
+    run()

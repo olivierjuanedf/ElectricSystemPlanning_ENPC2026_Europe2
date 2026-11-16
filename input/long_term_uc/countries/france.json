@@ -1,0 +1,21 @@
+{
+  "team": "france",
+  "selected_prod_types": {
+    "france": [
+      "nuclear",
+      "batteries",
+      "wind_onshore",
+      "wind_offshore",
+      "hydro_reservoir",
+      "hydro_pump_storage_closed_loop",
+      "hydro_pump_storage_open_loop",
+      "solar_pv"
+    ]
+  },
+  "capacities_tb_overwritten": {
+    "france": {
+      "nuclear": 30000,
+      "batteries": 20000
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "biomass": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  },
+  "coal": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  },
+  "gas": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  },
+  "hydro": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  },
+  "oil": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  },
+  "other_non_renew": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  },
+  "other_renew": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  },
+  "solar": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  },
+  "uranium": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  },
+  "wind": {
+    "marginal_cost": null,
+    "co2_emissions": null
+  }
+}

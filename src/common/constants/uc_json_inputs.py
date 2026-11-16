@@ -1,0 +1,56 @@
+from dataclasses import dataclass
+
+from src.utils.type_checker import CheckerNames
+
+
+@dataclass
+class CountryJsonParamNames:
+    capacities_tb_overwritten: str = 'capacities_tb_overwritten'
+    selected_prod_types: str = 'selected_prod_types'
+    team: str = 'team'
+
+
+@dataclass
+class EuropeJsonParamNames:
+    add_date_tag_to_output: str = 'add_date_tag_to_output'
+    add_run_idx_tag_to_output: str = 'add_run_idx_tag_to_output'
+    extra_params: str = 'extra_params'
+    failure_penalty: str = 'failure_penalty'
+    failure_power_capa: str = 'failure_power_capa'
+    interco_capas_tb_overwritten: str = 'interco_capas_tb_overwritten'
+    mode: str = 'mode'
+    output_tag: str = 'output_tag'
+    plot_link_capa_saturation: str = 'plot_link_capa_saturation'
+    plot_stock_soc_in_pu: str = 'plot_stock_soc_in_pu'
+    save_explicit_corresp_for_lp_elts: str = 'save_explicit_corresp_for_lp_elts'
+    save_custom_const_dual_vars: str = 'save_custom_const_dual_vars'
+    save_link_capa_dual_vars: str = 'save_link_capa_dual_vars'
+    selected_climatic_year: str = 'selected_climatic_year'
+    selected_countries: str = 'selected_countries'
+    selected_target_year: str = 'selected_target_year'
+    team: str = 'team'
+    uc_period_end: str = 'uc_period_end'
+    uc_period_start: str = 'uc_period_start'
+
+
+@dataclass
+class EuropeJsonExtraParamNames:
+    co2_emis_price: str = 'co2_emis_price'
+    max_co2_emis: str = 'max_co2_emis_constraints'
+    state_of_charge_init: str = 'state_of_charge_init_pu'
+    use_demand_adder_files: str = 'use_demand_adder_files'
+
+
+ALL_KEYWORD = 'all'
+OPTIONAL_EUR_JSON_PARAMS = [EuropeJsonParamNames.extra_params]
+EUR_JSON_PARAM_TYPES_FOR_CHECK = {EuropeJsonParamNames.extra_params: CheckerNames.is_dict,
+                                  EuropeJsonParamNames.failure_penalty: CheckerNames.is_float,
+                                  EuropeJsonParamNames.failure_power_capa: CheckerNames.is_float,
+                                  EuropeJsonParamNames.interco_capas_tb_overwritten: CheckerNames.is_dict_str_int,
+                                  EuropeJsonParamNames.mode: CheckerNames.is_str,
+                                  EuropeJsonParamNames.plot_link_capa_saturation: CheckerNames.is_bool,
+                                  EuropeJsonParamNames.selected_climatic_year: CheckerNames.is_int,
+                                  EuropeJsonParamNames.selected_target_year: CheckerNames.is_int,
+                                  EuropeJsonParamNames.team: CheckerNames.is_str,
+                                  EuropeJsonParamNames.uc_period_end: CheckerNames.is_str,
+                                  EuropeJsonParamNames.uc_period_start: CheckerNames.is_str}

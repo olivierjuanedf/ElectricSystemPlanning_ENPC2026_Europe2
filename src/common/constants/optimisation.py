@@ -1,0 +1,252 @@
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from itertools import product
+from typing import List
+
+import numpy as np
+
+from src.common.constants.countries import set_country_trigram
+from src.common.constants.temporal import Timescale
+from src.common.error_msgs import print_errors_list, unknown_value_error
+from src.utils.basic_utils import format_with_spaces, get_repeated_elts_in_lst, get_default_values
+from src.utils.dates import set_period_starts, get_hours_nber_between_dates
+
+
+@dataclass
+class OptimSolvers:
+    gurobi: str = 'gurobi'
+    highs: str = 'highs'
+
+
+@dataclass
+class OptimPbTypes:
+    lp: str = 'lp'
+    milp: str = 'milp'
+    qp: str = 'qp'
+    miqp: str = 'miqp'
+
+
+@dataclass
+class OptimPbCharacteristics:
+    type: str = 'LP'
+    n_variables: int = None
+    n_int_variables: int = None
+    n_constraints: int = None
+
+    def __repr__(self) -> str:
+        repr_str = f'{self.type.upper()} optimisation problem with:'
+        repr_str += f'\n* {format_with_spaces(number=self.n_variables)} variables'
+        if self.n_int_variables is not None:
+            repr_str += f' (including {format_with_spaces(number=self.n_int_variables)} integer ones)'
+        repr_str += f'\n* {format_with_spaces(number=self.n_constraints)} constraints'
+        return repr_str
+
+
+@dataclass
+class OptimResolStatus:
+    optimal: str = 'optimal'
+    infeasible: str = 'infeasible'
+
+
+OPTIM_RESOL_STATUS = OptimResolStatus()
+
+
+@dataclass
+class SolverParams:
+    name: str = 'highs'
+    license_file: str = None
+
+
+DEFAULT_OPTIM_SOLVER_PARAMS = SolverParams(name=OptimSolvers.highs)
+
+
+@dataclass
+class CustomConstraintNames:
+    hydro: str = 'hydro'
+    hydro_soc_min: str = 'hydro_soc_min'
+    hydro_soc_max: str = 'hydro_soc_max'
+    max_co2_emissions: str = 'max_co2_emissions'
+    max_prod_cost: str = 'max_prod_cost'
+
+
+@dataclass
+class CustomConstraintDirection:
+    upper: str = 'upper'
+    lower: str = 'lower'
+    equal: str = 'equal'
+
+
+@dataclass
+class ConstMultCoeffNames:
+    variable_cost: str = 'variable_cost'
+    co2_emis_factor: str = 'co2_emis_factor'
+
+
+# TODO: put as object (below) constants?
+N_COUNTRIES_MAX_IN_NAME = 3
+
+
+def set_sum_of_prod_const_name(const_type: str, temporal_granularity: str, direction: str,
+                               countries_suffix: str = None) -> str:
+    # remove prefix (min/max) from constraint type
+    for prefix in ["min_", "max_"]:
+        if const_type.startswith(prefix):
+            const_type = const_type[len(prefix):]
+    if countries_suffix is None:
+        countries_suffix = ""
+    return f"{const_type}_{temporal_granularity}_{direction}{countries_suffix}"
+
+
+def selec_custom_const_names(constraint_names: list[str]) -> list[str]:
+    custom_constraint_types = [CustomConstraintNames.max_co2_emissions, CustomConstraintNames.max_prod_cost]
+    temp_granularities = [Timescale.day, Timescale.week, Timescale.whole_period]
+    constraint_dirs = \
+        [CustomConstraintDirection.equal, CustomConstraintDirection.upper, CustomConstraintDirection.lower]
+    custom_const_names = []
+    for const_name in constraint_names:
+        if any([const_name.startswith(set_sum_of_prod_const_name(const_type=const_type,
+                                                                 temporal_granularity=temp_granularity,
+                                                                 direction=const_dir))
+                for const_type, temp_granularity, const_dir in
+                product(custom_constraint_types, temp_granularities, constraint_dirs)]):
+            custom_const_names.append(const_name)
+
+    return custom_const_names
+
+
+@dataclass
+class ZoneAndTempProdSumConstraint:
+    """
+    Zone (z) and temporal (t) sum of production constraint objects, of the form:
+    sum_{z, t} prod(z, t) * coeff(z, t) <= ub (or >= lb)
+    with coeff passed as a name of attribute available in PyPSA model defined here, variable_cost or co2_emis_factor
+    """
+    type: str  # name of the type of constraint, e.g. co2_emis
+    # either upper (zone-and-temp sum prod. <= bound) or lower (zone-and-temp sum prod. >= bound) or equal
+    # (idem = bound)
+    direction: str
+    mult_coeff_name: str  # name of the multiplicative coeffs to be used
+    countries: list[str]  # over which constraints is to be imposed
+    bound: np.ndarray
+    temporal_granularity: str = Timescale.whole_period  # temporal granularity associated to this constraint
+    name: str = None
+
+    def __repr__(self) -> str:
+        attr_sep = '\n- '
+        repr_str = f'{self.type} zone-and-temp. production-sum constraint'
+        repr_str += f' ({self.direction} bound)'
+        repr_str += f'{attr_sep}with {self.mult_coeff_name} multiplicative coeffs'
+        if self.name is None:
+            self.set_name()
+        repr_str += f'{attr_sep}over {self.name}'
+        repr_str += f'{attr_sep}and with temp. granularity {self.temporal_granularity}'
+        return repr_str
+
+    def set_name(self):
+        n_countries = len(self.countries)
+        if n_countries <= N_COUNTRIES_MAX_IN_NAME:
+            country_trigrams = [set_country_trigram(elt) for elt in self.countries]
+            self.name = '-'.join(country_trigrams)
+        else:
+            self.name = f'{n_countries}-countries'
+
+    def process(self, optim_start: datetime = None, optim_end: datetime = None, selected_countries: list[str] = None):
+        # add name if not provided
+        if self.name is None:
+            self.set_name()
+        if isinstance(self.bound, int):
+            self.bound = float(self.bound)
+
+        # cast bound as vector if per period constraint and float is provided
+        if (self.temporal_granularity in [Timescale.day, Timescale.week, Timescale.month]
+                and isinstance(self.bound, float)):
+            logging.info(f"Bound cast as - constant - vector for constraint {self.name}, as per "
+                         f"{self.temporal_granularity}ly period applied")
+            period_start_dates = set_period_starts(start_date=optim_start, end_date=optim_end,
+                                                   granularity=self.temporal_granularity)
+            self.bound = len(period_start_dates) * [self.bound]
+        # in this case, the constraint will be applied to whole Europe (countries considered in current run)
+        if self.countries == "europe" or self.countries == ["europe"]:
+            self.countries = selected_countries
+
+    def check(self, available_countries: List[str], optim_start: datetime = None, optim_end: datetime = None,
+              target_year: int = None):
+        """
+        Check sum-of-prod constraint
+        :param available_countries
+        :param optim_start: if per period max/min metric (like CO2 emissions) are used
+        :param optim_end: idem
+        :param target_year: to check coherence of (start of) period dates in year that will be used in PyPSA model.
+        If None, check will be done with year of optim_start/end
+        """
+        const_def_errors = []
+        # 1. All known countries?
+        unknown_countries = list(set(self.countries) - set(available_countries))
+        if len(unknown_countries) > 0:
+            logging.warning(f'Unknown countries in {str(self)} arg: {unknown_countries}'
+                            f'\n-> will not be accounted for in this constraint')
+            self.countries = [elt for elt in self.countries if elt in available_countries]
+        # 2. Repeated countries associated to this constraint?
+        repeated_countries = get_repeated_elts_in_lst(my_lst=self.countries)
+        if len(repeated_countries) > 0:
+            logging.warning(f'There are repeated countries in {str(self)}: {repeated_countries}\n'
+                            f'-> will be counted only once in this constraint rhs CO2 emis. calculation')
+            self.countries = list(set(self.countries))
+        # 3.-5. Known temporal granularity - 'direction' for the constraint - multiplicative coeff. name
+        # first set/get available values for these 3 attrs
+        # -> stop with error if not valid
+        available_temp_granularities = get_default_values(obj=Timescale)
+        # add 'granularity' corresponding to the application of this constraint to whole period
+        available_temp_granularities.append(Timescale.whole_period)
+        avail_const_directions = get_default_values(obj=CustomConstraintDirection)
+        avail_mult_coeff_names = get_default_values(obj=ConstMultCoeffNames)
+        known_value_checks = {'temporal granularity': (self.temporal_granularity, available_temp_granularities),
+                              'constraint "direction"': (self.direction, avail_const_directions),
+                              'multiplicative coeff. name': (self.mult_coeff_name, avail_mult_coeff_names)}
+        for attr_name, (val, avail_vals) in known_value_checks.items():
+            if val not in avail_vals:
+                const_def_errors.append(unknown_value_error(var_name=attr_name, value=val,
+                                                            available_values=avail_vals)
+                                        )
+
+        # check type of bound when summing over whole period
+        if self.temporal_granularity == Timescale.whole_period and not isinstance(self.bound, float):
+            const_def_errors.append(f"For sum-of-prod constraint over {Timescale.whole_period} bound must be a float")
+        # check that size of bound be coherent with number of daily/weekly periods in optimisation horizon considered
+        # N.B. case when bound is float and a constraint is applied per period has been processed before to make bound
+        # a vector of coherent size
+        if self.temporal_granularity in [Timescale.day, Timescale.week, Timescale.month]:
+            # using dates in target year, to be coherent with the treatment of dates made in PyPSA hereafter
+            if target_year is not None:
+                optim_end_year = target_year + (optim_end.year - optim_start.year)
+                optim_start = optim_start.replace(year=target_year)
+                optim_end = optim_end.replace(year=optim_end_year)
+            period_start_dates = set_period_starts(start_date=optim_start, end_date=optim_end,
+                                                   granularity=self.temporal_granularity)
+            n_periods = len(period_start_dates)
+            n_bound_values = len(self.bound)
+            if not n_periods == n_bound_values:
+                error_msg = f"Number of {self.temporal_granularity}ly periods in data {n_periods} does not "\
+                            f"correspond to the size of provided bound {n_bound_values} -> update either bound size, "\
+                            f"or optimization period"
+                const_def_errors.append(error_msg)
+        elif self.temporal_granularity == Timescale.whole_period:
+            n_periods = 1
+        # check if all periods contain all time-slots in model - otherwise bias on constraint def.
+        # (bound may be applied to a partial sum)
+        n_ts_in_optim = get_hours_nber_between_dates(start_date=optim_start, end_date=optim_end)
+        # TODO: make this test fully coherent in the case of month
+        n_ts_in_period_per_gran = {Timescale.day: 24, Timescale.week: 168,
+                                   Timescale.month: 4 * 168, Timescale.whole_period: n_ts_in_optim}
+        n_ts_in_period = n_ts_in_period_per_gran[self.temporal_granularity]
+        n_ts_full_const_def = n_periods * n_ts_in_period
+        if not n_ts_in_optim == n_ts_full_const_def:
+            logging.warning(
+                f"The number of time-slots in optim. model {n_ts_in_optim} does not coincide with the "
+                f"number of time-slots in {n_periods} {self.temporal_granularity}ly periods "
+                f"considered (i.e. {n_ts_full_const_def}) -> there may be a bias in the writing of some "
+                f"constraints with bound corresponding to a bigger sum than the one written")
+
+        if len(const_def_errors) > 0:
+            print_errors_list(error_name=f'in {str(self)}', errors_list=const_def_errors)

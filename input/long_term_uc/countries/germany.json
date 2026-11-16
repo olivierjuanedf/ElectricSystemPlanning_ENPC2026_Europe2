@@ -1,0 +1,12 @@
+{
+  "team": "germany",
+  "selected_prod_types": {
+    "germany": [
+      "all"
+    ]
+  },
+  "capacities_tb_overwritten": {
+    "germany": {
+    }
+  }
+}
