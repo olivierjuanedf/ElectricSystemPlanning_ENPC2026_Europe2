@@ -241,6 +241,29 @@ def sum_df_values_by_keys(df1: pd.DataFrame, df2: pd.DataFrame, key_cols: list[s
     )
 
 
+def complete_data_for_missing_dates(df: pd.DataFrame, start_date: datetime, end_date: datetime, fill_value, date_col,
+                                    value_col, freq: str = "h") -> pd.DataFrame:
+    """
+    Complete a (date, value) dataframe with a constant value for
+    missing dates between start_date (included) and end_date (excluded).
+    """
+    all_dates = pd.date_range(
+        start=start_date,
+        end=pd.Timestamp(end_date) - pd.tseries.frequencies.to_offset(freq),
+        freq=freq,
+    )
+
+    return (
+        pd.DataFrame({date_col: all_dates})
+        .merge(df, on=date_col, how="left")
+        .assign(
+            **{
+                value_col: lambda x: x[value_col].fillna(fill_value)
+            }
+        )
+    )
+
+
 if __name__ == '__main__':
     data = {
         'date': pd.date_range('2025-11-10', periods=3, freq='D'),

@@ -68,7 +68,7 @@ from src.common.logger import init_logger, stop_logger, deactivate_verbose_warni
 from src.common.long_term_uc_io import (
     set_full_lt_uc_output_folder,
     get_demand_adder_files,
-    get_preprocessed_hydro_levels_file,
+    get_preprocessed_hydro_levels_file, get_demand_adder_optional_folder,
 )
 from src.common.plot_params import PlotParamsKeysInJson
 from src.common.uc_run_params import UCRunParams
@@ -118,6 +118,13 @@ def get_needed_eraa_data(uc_run_params: UCRunParams, eraa_data_descr: ERAADatase
         eraa_dataset.apply_demand_adder(files=uc_run_params.demand_adder_files,
                                         selected_climatic_year=uc_run_params.selected_climatic_year,
                                         uc_period=(uc_run_params.uc_period_start, uc_run_params.uc_period_end))
+
+    # apply demand shaper
+    if uc_run_params.demand_shaper_file is not None:
+        demand_shaper_json_filepath = os.path.join(get_demand_adder_optional_folder(), uc_run_params.demand_shaper_file)
+        eraa_dataset.apply_demand_shaper(json_filepath=demand_shaper_json_filepath,
+                                         selected_climatic_year=uc_run_params.selected_climatic_year,
+                                         uc_period=(uc_run_params.uc_period_start, uc_run_params.uc_period_end))
 
     logging.info(f'{TITLE_LOG_SEP} II)2) Check data coherence {TITLE_LOG_SEP}')
     logging.info('Get generation units data, from both ERAA data - read just before '
@@ -392,6 +399,19 @@ def save_data_and_fig_results(pypsa_model: PypsaModel, uc_run_params: UCRunParam
         return None
 
 
+def set_the_end_log_msg(network_name: str, run_duration_s: float, uc_summary_metrics: UCSummaryMetrics = None,
+                        output_tag: str = None) -> str:
+    if output_tag is None:
+        output_tag = ""
+    run_complem_msg = f" for network {network_name}"
+    if len(output_tag) > 0:
+        run_complem_msg += f", with output tag {output_tag}"
+    summary_metrics_msg = "" if uc_summary_metrics is None else f":\n{str(uc_summary_metrics)}"
+    log_msg = f'{TITLE_LOG_SEP} THE END of ERAA-PyPSA long-term UC simulation{run_complem_msg}! '\
+              f'(after {run_duration_s:.2f}s) {TITLE_LOG_SEP}{summary_metrics_msg}'
+    return log_msg
+
+
 def run(network_name: str = 'my little europe', solver_params: SolverParams = None,
         fixed_uc_run_params: UCRunParams = None, fixed_run_params_fields: List[str] = None, extra_params: dict = None,
         json_params_filepath: str = None):
@@ -479,6 +499,12 @@ def run(network_name: str = 'my little europe', solver_params: SolverParams = No
     else:
         uc_run_params.demand_adder_files = []
 
+    # "demand shapers" will not be used
+    if not usage_params.manually_shaping_demand and uc_run_params.demand_shaper_file is not None:
+        logging.warning(f"Demand shaper file {uc_run_params.demand_shaper_file} will not be used, as functionality "
+                        f"deactivated in current parametrization of the environment.")
+        uc_run_params.demand_shaper_file = None
+
     logging.info(f'{TITLE_LOG_SEP} II) Get data for UC model {TITLE_LOG_SEP}')
 
     eraa_dataset = get_needed_eraa_data(uc_run_params=uc_run_params, eraa_data_descr=eraa_data_descr,
@@ -517,11 +543,9 @@ def run(network_name: str = 'my little europe', solver_params: SolverParams = No
 
     run_end = time.time()
 
-    run_complem_msg = f" for network {network_name}"
-    if uc_run_params.output_tag is not None:
-        run_complem_msg += f", with output tag {uc_run_params.output_tag}"
-    logging.info(f'{TITLE_LOG_SEP} THE END of ERAA-PyPSA long-term UC simulation{run_complem_msg}! '
-                 f'(after {run_end - run_start:.2f}s) {TITLE_LOG_SEP}:\n{str(uc_summary_metrics)}')
+    the_end_log_msg = set_the_end_log_msg(network_name=network_name, run_duration_s=run_end-run_start,
+                                          uc_summary_metrics=uc_summary_metrics, output_tag=uc_run_params.output_tag)
+    logging.info(the_end_log_msg)
     stop_logger()
     return uc_summary_metrics
 

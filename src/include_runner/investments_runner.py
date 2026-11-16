@@ -1562,3 +1562,28 @@ def save_simulation_evolutions(
         json.dump(evolution_data, f, indent=2, ensure_ascii=False)
 
     return txt_path, json_path
+
+
+def clear_runner_outputs(output_dir: str = "output/runner") -> List[str]:
+    """
+    Remove all runner output files (comparisons, latest pointers, and history evolutions)
+    from output_dir to prevent blurring incremental results.
+    Preserves hidden files such as .gitkeep or .gitignore.
+    Returns the list of removed file paths.
+    """
+    if not os.path.isdir(output_dir):
+        return []
+
+    removed = []
+    for item in sorted(os.listdir(output_dir)):
+        if item.startswith("."):
+            continue
+        item_path = os.path.join(output_dir, item)
+        if os.path.isfile(item_path):
+            try:
+                os.remove(item_path)
+                removed.append(item_path)
+            except OSError as exc:
+                logging.warning(f"Could not remove runner output file {item_path}: {exc}")
+    return removed
+

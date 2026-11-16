@@ -79,6 +79,7 @@ class UCRunParams:
     output_tag: str = None
     # use demand-adder files from input/optinal/demand folder?
     use_demand_adder_files: bool = False
+    demand_shaper_file: str = None
     # save files with correspondence between PyPSA "abstract" variable/constraint names and explicit ones
     save_explicit_corresp_for_lp_elts: bool = False
     # save link capa constraint dual variables

@@ -34,11 +34,13 @@ from src.common.uc_run_params import UCRunParams
 from src.include.dataset_builder import GenerationUnitData, select_gen_units_data
 from src.utils.basic_utils import get_intersection_of_lists, dict_to_str, format_with_spaces
 from src.utils.df_utils import create_dict_from_cols_in_df, selec_in_df_based_on_list, set_aggreg_col_based_on_corresp, \
-    create_dict_from_df_row, resample_and_distribute, sum_df_values_by_keys
+    create_dict_from_df_row, resample_and_distribute, sum_df_values_by_keys, complete_data_for_missing_dates
 from src.utils.dir_utils import uniformize_path_os
 from src.utils.eraa_data_reader import filter_input_data, gen_capa_pt_str_sanitizer, select_interco_capas, \
     set_aggreg_cf_prod_types_data, read_and_process_hydro_data, read_and_process_hydro_data_from_input_folder
 from src.utils.write import json_dump
+from src.utils.dates import get_hours_nber_between_dates
+from src.utils.read import check_and_load_json_file
 
 N_SPACES_MSG = 2
 PROD_TYPE_AGG_COL = f'{COLUMN_NAMES.production_type}_agg'
@@ -61,8 +63,7 @@ def get_demand_data(folder: str, file_suffix: str, climatic_year: int, period: T
     return df_demand
 
 
-def get_demand_adder_data(filepath: str, climatic_year: int,
-                          period: Tuple[datetime, datetime]) -> pd.DataFrame:
+def get_demand_adder_data(filepath: str, climatic_year: int, period: tuple[datetime, datetime]) -> pd.DataFrame:
     logging.debug('Get demand adder data')
     if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
         return pd.DataFrame(columns=[COLUMN_NAMES.date, COLUMN_NAMES.value, COLUMN_NAMES.climatic_year])
@@ -77,6 +78,48 @@ def get_demand_adder_data(filepath: str, climatic_year: int,
                                         climatic_year_col=COLUMN_NAMES.climatic_year, period_start=period[0],
                                         period_end=period[1], climatic_year=climatic_year)
     return df_demand_adder
+
+
+def get_shaper_profile(filepath: str, climatic_year: int, period: tuple[datetime, datetime],
+                       country: str = None) -> np.ndarray:
+    logging.debug('Get demand shaper data')
+    uc_period_start = period[0]
+    uc_period_end = period[1]
+    n_ts_in_uc = get_hours_nber_between_dates(start_date=uc_period_start, end_date=uc_period_end)
+    log_msg_prefix = f"{country.capitalize()} demand shaper profile" if country is not None else "Demand shaper profile"
+    if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+        logging.warning(f"{log_msg_prefix} file does not exist -> all one profile returned")
+        return np.ones(n_ts_in_uc)
+    try:
+        df_demand_shaper = pd.read_csv(filepath, sep=FILES_FORMAT.column_sep, decimal=FILES_FORMAT.decimal_sep)
+    except pd.errors.EmptyDataError:
+        logging.warning(f"{log_msg_prefix} file is empty -> all one profile returned")
+        return np.ones(n_ts_in_uc)
+    if COLUMN_NAMES.climatic_year not in df_demand_shaper.columns:
+        df_demand_shaper[COLUMN_NAMES.climatic_year] = climatic_year
+    # then keep only selected period date range and climatic year
+    df_demand_shaper = filter_input_data(df=df_demand_shaper, date_col=COLUMN_NAMES.date,
+                                         climatic_year_col=COLUMN_NAMES.climatic_year, period_start=period[0],
+                                         period_end=period[1], climatic_year=climatic_year)
+    # remove CY column, with unique - selected CY - value
+    df_demand_shaper = df_demand_shaper[[COLUMN_NAMES.date, COLUMN_NAMES.value]]
+    # check if provided values have an avg of 1
+    mean_shaper_vals = df_demand_shaper[COLUMN_NAMES.value].mean()
+    if not mean_shaper_vals == 1:
+        logging.warning(f"{log_msg_prefix} has not an average of 1 but {mean_shaper_vals:.2f} -> rescaled to 1")
+        df_demand_shaper[COLUMN_NAMES.value] /= mean_shaper_vals
+    # complete missing data in interval [uc_start, uc_end] by values 1
+    df_demand_shaper = df_demand_shaper.sort_values(COLUMN_NAMES.date)
+    init_len = len(df_demand_shaper)
+    if not (df_demand_shaper[COLUMN_NAMES.date].iloc[0] == uc_period_start
+            and df_demand_shaper[COLUMN_NAMES.date].iloc[-1] == uc_period_end):
+        df_demand_shaper = (
+            complete_data_for_missing_dates(df=df_demand_shaper, start_date=uc_period_start, end_date=uc_period_end,
+                                            fill_value=1, date_col=COLUMN_NAMES.date, value_col=COLUMN_NAMES.value)
+        )
+        n_compl_vals = len(df_demand_shaper) - init_len
+        logging.info(f"{log_msg_prefix} with {n_compl_vals} values set to 1 for dates missing in UC period simulated")
+    return np.array(df_demand_shaper[COLUMN_NAMES.value])
 
 
 def get_cf_agg_prod_types_tb_read(selected_agg_prod_types: List[str], agg_prod_types_with_cf_data: List[str],
@@ -953,6 +996,31 @@ class Dataset:
                                           key_cols=[COLUMN_NAMES.climatic_year, COLUMN_NAMES.date],
                                           value_col=COLUMN_NAMES.value)
                 )
+
+    def apply_demand_shaper(self, json_filepath: str, selected_climatic_year: int,
+                            uc_period: tuple[datetime, datetime]):
+        per_country_shaper_params = check_and_load_json_file(json_file=json_filepath, file_descr="demand shaper")
+        demand_shaper_optional_folder = get_demand_adder_optional_folder()
+        countries_with_applied_shaper = []
+        for country, df_demand in self.demand.items():
+            if country in per_country_shaper_params:
+                # TODO: introduce shaper object for cleaner version
+                shaper_params = per_country_shaper_params[country]
+                shaper_energy = shaper_params[0]
+                if len(shaper_params) == 2:
+                    shaper_profile_filepath = os.path.join(demand_shaper_optional_folder, shaper_params[1])
+                    shaper_profile = (
+                        get_shaper_profile(filepath=shaper_profile_filepath, climatic_year=selected_climatic_year,
+                                           period=uc_period, country=country)
+                    )
+                    df_demand[COLUMN_NAMES.value] *= shaper_profile
+                init_total_demand = df_demand[COLUMN_NAMES.value].sum()
+                shaper_energy_ratio = float(shaper_energy / init_total_demand)
+                df_demand[COLUMN_NAMES.value] *= shaper_energy_ratio
+                countries_with_applied_shaper.append(f"{country}: {shaper_energy_ratio:.2f}")
+        if len(countries_with_applied_shaper) > 0:
+            logging.info(f"Countries on which demand shaper has been applied with associated multiplicative ratios: "
+                         f"{';'.join(countries_with_applied_shaper)}")
 
     def get_agg_prod_types(self, country: str) -> List[str]:
         return list(set(self.agg_gen_capa_data[country][PROD_TYPE_AGG_COL]))

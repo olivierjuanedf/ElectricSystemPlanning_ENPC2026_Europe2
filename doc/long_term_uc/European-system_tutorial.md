@@ -49,7 +49,7 @@ described just below.
 
 ## II.4) Output files
 
-**Obtained data (respectively plotted figures) results** are given in [output/long_term_uc/data](../../output/long_term_uc/data) (resp. [output/long_term_uc/figures](../../output/long_term_uc/figures)) folders.
+**Obtained data (respectively plotted figures) results** are given in [output/long_term_uc/data](../../output/long_term_uc/data) (resp. [output/long_term_uc/figures](../../output/long_term_uc/figures)) folders (example outputs are provided in [data_example](../../output/long_term_uc/data/data_example) and [figure_example](../../output/long_term_uc/figure/figure_example)).
 Note that, **as explained with the description of** [elec-europe_params_to-be-modif.json](../../input/long_term_uc/elec-europe_params_to-be-modif.json) input file in Appendix section, 
 **a "tag" - indicating name of the run**, and optionally a counter index - **can be added to data/figures subfolder to identify them more simply**.
 
@@ -59,22 +59,22 @@ For all files obtained, **suffixes indicate** the (i) **Country** corresponding 
 In detail, and **except if the resolution of PyPSA optimization model was not successful**, it will give you: 
 * ([data](../../output/long_term_uc/data) subfolder) **optimal production of all generators** considered in Europe, in *opt_power_europe_{TY and CY}_{start date}.csv* file. 
 
-  Ex: in the run provided on a "toy model" only France and Germany - and for the three first weeks of 2033 and climatic year 1989, [opt_power_europe_2033_cy1989_1900-01-01.csv](../../output/long_term_uc/data/opt_power_europe_2033_cy1989_1900-01-01.csv) contains these information for both countries.
+  Ex: in the run provided on a "toy model" only France and Germany - and for the three first weeks of 2033 and climatic year 1989, [opt_power_europe_2033_cy1989_1900-01-01.csv](../../output/long_term_uc/data/data_example/opt_power_europe_2033_cy1989_1900-01-01.csv) contains these information for both countries.
 
 * ([data](../../output/long_term_uc/data)) **"prices" for all countries** considered in Europe, in *marginal-prices_europe_{TY and CY}_{start date}.csv* file. 
 
   N.B. Specifically, these prices are the optimal values of dual variables associated to supply-demand equilibrium (for those who are familiar with optimization; otherwise it will be explained!). 
 
-  Ex: see [marginal-prices_europe_2033_cy1989_1900-01-01.csv](../../output/long_term_uc/data/marginal-prices_europe_2033_cy1989_1900-01-01.csv).
+  Ex: see [marginal-prices_europe_2033_cy1989_1900-01-01.csv](../../output/long_term_uc/data/data_example/marginal-prices_europe_2033_cy1989_1900-01-01.csv).
 
-* ([data](../../output/long_term_uc/data)) **optimal flows in the interconnections** in *link-flow_opt_decisions_europe_{TY and CY}_{start date}.csv*.
+* ([data](../../output/long_term_uc/data)) **optimal flows in the interconnections** in *link-flow_opt_decisions_europe_{TY and CY}_{start date}.csv*. 
 
-  Ex: see [link-flow_opt_decisions_europe_2033_cy1989_1900-01-01.csv](../../output/long_term_uc/data/link-flow_opt_decisions_europe_2033_cy1989_1900-01-01.csv).
+  Ex: see [link-flow_opt_decisions_europe_2033_cy1989_1900-01-01.csv](../../output/long_term_uc/data/data_example/link-flow_opt_decisions_europe_2033_cy1989_1900-01-01.csv).
 
 * ([data](../../output/long_term_uc/data)) **optimal decisions for the storages** - production (turbining, discharging; depending on the type of asset), 
 consumption (pumping, charging) and "State-of-Charge" (water/battery level) in *storage_opt_decisions_europe_{TY and CY}_{start date}.csv*.
 
-  Ex: see [storage_opt_decisions_europe_2033_cy1989_1900-01-01.csv](../../output/long_term_uc/data/storage_opt_decisions_europe_2033_cy1989_1900-01-01.csv).
+  Ex: see [storage_opt_decisions_europe_2033_cy1989_1900-01-01.csv](../../output/long_term_uc/data/data_example/storage_opt_decisions_europe_2033_cy1989_1900-01-01.csv).
 
 * ([data](../../output/long_term_uc/data)) summary of (per-country) main results in *uc-summary_europe_{TY and CY}_{start date}.json*. In detail, all metrics being calculated over the whole UC period:
   - **per_country_ens**: Energy Not Served, i.e. the yearly volume of production of (fictive) failure asset (MWh).
@@ -83,14 +83,14 @@ consumption (pumping, charging) and "State-of-Charge" (water/battery level) in *
   - **total_operational_cost** (resp. **per_country_total_operational_cost**): previous value over Europe (resp. for a given country), from which failure cost (penalty) has been subtracted (M€).
   - **total_co2_emissions** (resp. **per_country_co2_emissions**): CO2 emissions over Europe (resp. for a given country) (tCO2eq.).
 
-  Ex: see [uc-summary_europe_2033_cy1989_1900-01-01.json](../../output/long_term_uc/data/uc-summary_europe_2033_cy1989_1900-01-01.json).
+  Ex: see [uc-summary_europe_2033_cy1989_1900-01-01.json](../../output/long_term_uc/data/data_example/uc-summary_europe_2033_cy1989_1900-01-01.json).
 * ([data](../../output/long_term_uc/data)) An LP file containing the description of UC optimization problem solved, in *model_7-countries_{start date}.lp*.
 
   N.B. The suffix of this file contain the trigrams of the considered countries if they are very few; otherwise their number 
 (7 if you are simulating the whole perimeter available for this class).
 
 
-  Ex: see [model_2-countries_2033-01-01.lp](../../output/long_term_uc/data/model_2-countries_2033-01-01.lp) - with potentially a bit "cryptic" notations... we could discuss this a bit later!
+  Ex: see [model_2-countries_2033-01-01.lp](../../output/long_term_uc/data/data_example/model_2-countries_2033-01-01.lp) - with potentially a bit "cryptic" notations... we could discuss this a bit later!
 
 <br>
 
@@ -98,19 +98,19 @@ consumption (pumping, charging) and "State-of-Charge" (water/battery level) in *
 
   N.B. Idem regarding the suffix.
 
-  Ex: see [network_2-bus.png](../../output/long_term_uc/figures/network_2-bus.png).
+  Ex: see [network_2-bus.png](../../output/long_term_uc/figure/figure_example/network_2-bus.png).
 
 * ([figures](../../output/long_term_uc/figures)) A **"cumulated (stacked) vision" of the production**, in *prod_{country}_{TY and CY}_{start date}.png* files.
 
-    Ex: see [prod_france_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figures/prod_france_2033_cy1989_1900-01-01.png) for France.
+    Ex: see [prod_france_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figure/figure_example/prod_france_2033_cy1989_1900-01-01.png) for France.
 
 * ([figures](../../output/long_term_uc/figures)) **Stock State-of-CHarge (SoC)**, in *stock_soc_{country}_{TY and CY}_{strat date}.png* files.
 
-    Ex: see [stock_soc_france_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figures/stock_soc_france_2033_cy1989_1900-01-01.png) for France.
+    Ex: see [stock_soc_france_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figure/figure_example/stock_soc_france_2033_cy1989_1900-01-01.png) for France.
 
 * ([figures](../../output/long_term_uc/figures)) **Price curves**, for the different countries in *prices_europe_{TY and CY}_{start date}.png* file.
 
-  Ex: see [prices_europe_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figures/prices_europe_2033_cy1989_1900-01-01.png).
+  Ex: see [prices_europe_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figure/figure_example/prices_europe_2033_cy1989_1900-01-01.png).
 
 ## Start preparing the "design" of your country/Europe system by playing with this UC tool
 

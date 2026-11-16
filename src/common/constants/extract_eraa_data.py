@@ -55,6 +55,7 @@ class UsageParameters:
     apply_per_prod_unit_init_soc: bool = False
     overwriting_eraa_interco_capa_vals: bool = False
     manually_adding_demand: bool = False
+    manually_shaping_demand: bool = False
     manually_adding_generators: bool = False
     # use data of first year for default generation capacity data - as if fleet of asset has
     # not changed from initial situation

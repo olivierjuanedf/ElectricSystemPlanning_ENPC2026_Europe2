@@ -2,7 +2,7 @@ import sys
 import logging
 from typing import List, Dict, Union
 
-from src.utils.basic_utils import robust_round_value
+from src.utils.basic_utils import robust_round_value, fmt_nber_with_spaces_in_dict
 
 
 def print_errors_list(error_name: str, errors_list: List[str]):
@@ -40,10 +40,11 @@ def infeas_debugging_hints_msg(total_capa: Union[float, Dict[str, float]],
     info_msg = "Debugging hints:"
     info_msg += "\n  1. Does the total installed capacity cover the peak demand?"
     total_capa = robust_round_value(value=total_capa, n_digits=0)
+    total_capa = {country_trigram: float(val) for country_trigram, val in total_capa.items()}
     max_load = robust_round_value(value=max_load, n_digits=0)
     per_bus_msg = '(Per bus) ' if isinstance(total_capa, dict) else ''
-    info_msg += f"\n     {per_bus_msg}Maximum observed demand (MW): {max_load}"
-    info_msg += f"\n     {per_bus_msg}Total installed capacity (MW): {total_capa}"
+    info_msg += f"\n     {per_bus_msg}Maximum observed demand (MW): {fmt_nber_with_spaces_in_dict(d=max_load)}"
+    info_msg += f"\n     {per_bus_msg}Total installed capacity (MW): {fmt_nber_with_spaces_in_dict(total_capa)}"
     info_msg += "\n  2. Is failure_power_capa large enough?"
     info_msg += "\n  3. Are storage constraints (hydro, batteries) consistent? (not 'too' constraining)"
     return info_msg
