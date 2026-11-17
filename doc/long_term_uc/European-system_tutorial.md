@@ -49,7 +49,7 @@ described just below.
 
 ## II.4) Output files
 
-**Obtained data (respectively plotted figures) results** are given in [output/long_term_uc/data](../../output/long_term_uc/data) (resp. [output/long_term_uc/figures](../../output/long_term_uc/figures)) folders (example outputs are provided in [data_example](../../output/long_term_uc/data/data_example) and [figure_example](../../output/long_term_uc/figure/figure_example)).
+**Obtained data (respectively plotted figures) results** are given in [output/long_term_uc/data](../../output/long_term_uc/data) (resp. [output/long_term_uc/figures](../../output/long_term_uc/figures)) folders (example outputs are provided in [data_example](../../output/long_term_uc/data/data_example) and [figure_example](../../output/long_term_uc/figures/figure_example)).
 Note that, **as explained with the description of** [elec-europe_params_to-be-modif.json](../../input/long_term_uc/elec-europe_params_to-be-modif.json) input file in Appendix section, 
 **a "tag" - indicating name of the run**, and optionally a counter index - **can be added to data/figures subfolder to identify them more simply**.
 
@@ -98,19 +98,19 @@ consumption (pumping, charging) and "State-of-Charge" (water/battery level) in *
 
   N.B. Idem regarding the suffix.
 
-  Ex: see [network_2-bus.png](../../output/long_term_uc/figure/figure_example/network_2-bus.png).
+  Ex: see [network_2-bus.png](../../output/long_term_uc/figures/figure_example/network_2-bus.png).
 
 * ([figures](../../output/long_term_uc/figures)) A **"cumulated (stacked) vision" of the production**, in *prod_{country}_{TY and CY}_{start date}.png* files.
 
-    Ex: see [prod_france_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figure/figure_example/prod_france_2033_cy1989_1900-01-01.png) for France.
+    Ex: see [prod_france_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figures/figure_example/prod_france_2033_cy1989_1900-01-01.png) for France.
 
 * ([figures](../../output/long_term_uc/figures)) **Stock State-of-CHarge (SoC)**, in *stock_soc_{country}_{TY and CY}_{strat date}.png* files.
 
-    Ex: see [stock_soc_france_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figure/figure_example/stock_soc_france_2033_cy1989_1900-01-01.png) for France.
+    Ex: see [stock_soc_france_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figures/figure_example/stock_soc_france_2033_cy1989_1900-01-01.png) for France.
 
 * ([figures](../../output/long_term_uc/figures)) **Price curves**, for the different countries in *prices_europe_{TY and CY}_{start date}.png* file.
 
-  Ex: see [prices_europe_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figure/figure_example/prices_europe_2033_cy1989_1900-01-01.png).
+  Ex: see [prices_europe_2033_cy1989_1900-01-01.png](../../output/long_term_uc/figures/figure_example/prices_europe_2033_cy1989_1900-01-01.png).
 
 ## Start preparing the "design" of your country/Europe system by playing with this UC tool
 

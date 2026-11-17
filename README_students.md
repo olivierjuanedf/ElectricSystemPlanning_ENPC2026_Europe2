@@ -2,10 +2,9 @@
 
 This code will help you simulate your own European electric system. It is written in Python, using the [PyPSA](https://pypsa.org/) library to build Unit Commitment (UC) models, and it relies on the ERAA (European Resource Adequacy Assessment) dataset.
 
-The repository supports three complementary use cases:
+The repository supports two complementary use cases:
 1. **European Unit Commitment (European mode)**: Simulate multi-country or single-country dispatch and optimal power flow across Europe (available on all branches).
 2. **Data Crunch**: Analyze ERAA raw data, capacity factors, residual demand, and run exploratory notebooks (`main` branch).
-3. **Toy Models**: Discover PyPSA modeling with simple single-zone pedagogical examples (`main-full` branch).
 
 ## Requirements 
 
@@ -162,21 +161,13 @@ Finally, edit [`input/long_term_uc/solver_params.json`](input/long_term_uc/solve
 * `data/` : Input data from ERAA 2023-2 (hourly demand, generation capacities, hydro parameters, interconnection capacities, RES capacity factors) and fuel/technology data.
 * `input/` : User configuration parameters:
   * `input/long_term_uc/` : Parameters for the European long-term UC model (global configuration and per-country overrides in `countries/`).
-  * `input/data_analysis/` : Configuration for raw data extraction and plots (`main-full` branch).
-  * `input/toy_model_params/` : Parameters for single-zone toy models (`main-full` branch).
 * `output/` : Simulation outputs (generated CSV data tables, network LP formulation, summary JSON, and plotted figures).
 * `doc/` : Detailed documentation and tutorials:
   * `doc/long_term_uc/` : European UC tutorial (`European-system_tutorial.md`).
   * `doc/data-analysis/` : Data crunch and data analysis tutorials and guide.
-  * `doc/toy_model/` : Toy model tutorial and task descriptions.
-  * `doc/teachers/` : Pedagogical plans, developer notes, and TODOs.
-* `tests/` : Automated test suite (`pytest`).
 * **Main entry point scripts** (at the root of the repository):
   * `my_little_europe_lt_uc.py` : Main script for the European Unit Commitment simulation.
   * `data_crunch.ipynb` : Interactive data exploration notebook.
-  * `my_little_europe_data_analysis.py` : Data extraction and plotting script (`main-full`).
-  * `my_toy_ex_italy.py` / `my_toy_ex_country.py` : Simplified pedagogical single-country examples (`main-full`).
-
 
 ## Quick Start
 
@@ -203,25 +194,3 @@ Finally, edit [`input/long_term_uc/solver_params.json`](input/long_term_uc/solve
 * **Detailed tutorial**: see [`doc/data-analysis/datacrunch_notebook.md`](doc/data-analysis/datacrunch_notebook.md).
 
 ---
-
-### 3. Toy Model Mode (`main-full` branch)
-
-* **Pedagogical single-zone scripts**:
-  * `my_toy_ex_italy.py` : Toy example based on Italy.
-  * `my_toy_ex_country.py` : Generic country toy model.
-* **Configuration files**: `input/toy_model_params/`
-* **Detailed tutorial**: see [`doc/toy_model/toy-model_tutorial.md`](doc/toy_model/toy-model_tutorial.md).
-
----
-
-## Git Branches & Teacher Information
-
-The repository uses two primary branches to serve different pedagogical and development objectives:
-
-* **Branch `main`** : Light version designed for students.
-  * Focuses on the data crunch notebook and the European UC simulation mode.
-  * Simplifies the repository view by omitting exploratory data analysis and toy models.
-* **Branch `main-full`** : Full version with all features.
-  * Contains all simulation modes (European UC, Data Analysis, Toy Models).
-  * Includes teacher notes, backlog, and development plans in [`doc/teachers/`](doc/teachers/).
-  * **Use this branch** for new developments, contributions, and instructor reference.

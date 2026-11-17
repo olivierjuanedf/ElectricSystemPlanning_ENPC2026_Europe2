@@ -512,6 +512,8 @@ class UCOptimalSolution:
         hydro_soc_min_plot = None
         hydro_soc_max_plot = None
 
+        storage_const_soc_max = storage_const_soc_max or {}
+
         # convert all values in per unit (of storage CONSTANT capacity)
         if plot_in_pu:
 
@@ -520,18 +522,28 @@ class UCOptimalSolution:
                     continue
 
                 capacity = storage_const_soc_max[col]
-
-                df_soc_opt[col] /= capacity
+                if capacity is not None and not np.isnan(capacity) and capacity > 0:
+                    df_soc_opt[col] /= capacity
 
             if hydro_soc_min is not None:
                 hydro_soc_min_plot = {}
                 for asset, val in hydro_soc_min.items():
-                    hydro_soc_min_plot[asset] = np.array(val, copy=True) / storage_const_soc_max[asset]
+                    capacity = storage_const_soc_max.get(asset, None)
+                    val_arr = np.array(val, copy=True)
+                    if capacity is not None and not np.isnan(capacity) and capacity > 0:
+                        hydro_soc_min_plot[asset] = val_arr / capacity
+                    else:
+                        hydro_soc_min_plot[asset] = np.zeros_like(val_arr, dtype=float)
 
             if hydro_soc_max is not None:
                 hydro_soc_max_plot = {}
                 for asset, val in hydro_soc_max.items():
-                    hydro_soc_max_plot[asset] = np.array(val, copy=True) / storage_const_soc_max[asset]
+                    capacity = storage_const_soc_max.get(asset, None)
+                    val_arr = np.array(val, copy=True)
+                    if capacity is not None and not np.isnan(capacity) and capacity > 0:
+                        hydro_soc_max_plot[asset] = val_arr / capacity
+                    else:
+                        hydro_soc_max_plot[asset] = np.zeros_like(val_arr, dtype=float)
 
         else:
             hydro_soc_min_plot = hydro_soc_min
@@ -608,7 +620,7 @@ class UCOptimalSolution:
                 line = ax_other.plot(snapshots, df_soc_opt[asset],
                                      label=rm_country_from_prod_unit_name(asset), color=color)[0]
 
-                if not plot_in_pu:
+                if not plot_in_pu and asset in storage_const_soc_max:
                     ax_other.axhline(y=storage_const_soc_max[asset], color=color, linestyle="--", alpha=0.8)
 
             ax_other.set_title("Other storage SOC")

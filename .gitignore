@@ -177,8 +177,10 @@ output/long_term_uc/multizones_eur/data/*.json
 output/long_term_uc/multizones_eur/data/*.lp
 output/long_term_uc/multizones_eur/figures/*.png
 output/long_term_uc/data/*
+!output/long_term_uc/data/data_example/
 output/long_term_uc/data_*
 output/long_term_uc/figures/*
+!output/long_term_uc/figures/figure_example/
 output/long_term_uc/figures_*
 output/long_term_uc/monozone_*/
 output/toy_model_*/
