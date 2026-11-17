@@ -503,12 +503,17 @@ def get_eraa_baseline_cache_path(
     period_end: str,
     target_year: int = 2033,
     climatic_year: int = 1989,
+    countries: Optional[List[str]] = None,
     output_dir: str = "output/runner",
 ) -> str:
     """Return the cache file path for an ERAA baseline simulation."""
     baselines_dir = os.path.join(output_dir, "baselines")
     period_tag = get_period_tag(period_start, period_end)
-    filename = f"eraa_baseline_{eraa_year}_target{target_year}_cy{climatic_year}_{period_tag}.json"
+    if countries and len(countries) < len(AVAILABLE_COUNTRIES):
+        c_tag = "_" + "-".join(sorted(countries))
+    else:
+        c_tag = ""
+    filename = f"eraa_baseline_{eraa_year}_target{target_year}_cy{climatic_year}{c_tag}_{period_tag}.json"
     return os.path.join(baselines_dir, filename)
 
 
@@ -537,6 +542,7 @@ def write_country_json(country: str, capacities: Dict[str, float],
     Write or update input/long_term_uc/countries/{country}.json.
     Sets team, selected_prod_types, and capacities_tb_overwritten.
     Filters out assets not present in the ERAA dataset for this country and year.
+    Only writes capacities_tb_overwritten for active assets to prevent PyPSA unused capacity warnings.
     """
     os.makedirs(countries_dir, exist_ok=True)
     json_path = os.path.join(countries_dir, f"{country}.json")
@@ -548,7 +554,6 @@ def write_country_json(country: str, capacities: Dict[str, float],
     valid_capacities: Dict[str, float] = {}
     for asset, capa in capacities.items():
         if available_eraa is not None and asset not in available_eraa:
-            print(f"      [!] Warning: '{asset}' is not available in the ERAA dataset for '{country}' in {target_year}. Asset ignored.")
             continue
         valid_capacities[asset] = capa
 
@@ -556,16 +561,54 @@ def write_country_json(country: str, capacities: Dict[str, float],
     if ProdTypeNames.failure not in active_assets:
         active_assets.append(ProdTypeNames.failure)
 
+    # Only include capacities for active assets in capacities_tb_overwritten (except failure)
+    overwritten_caps = {
+        asset: capa for asset, capa in valid_capacities.items()
+        if asset in active_assets and asset != ProdTypeNames.failure
+    }
+
     data_to_write = {
         "team": country,
         "selected_prod_types": {country: active_assets},
-        "capacities_tb_overwritten": {country: valid_capacities}
+        "capacities_tb_overwritten": {country: overwritten_caps}
     }
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(data_to_write, f, indent=2, ensure_ascii=False)
 
     return json_path
+
+
+def sync_country_json_files(
+    active_countries: List[str],
+    country_capacities: Dict[str, Dict[str, float]],
+    countries_dir: str = "input/long_term_uc/countries",
+    target_year: Optional[int] = None,
+) -> None:
+    """
+    Synchronize the input/long_term_uc/countries directory:
+    - Writes/updates JSON files for active_countries.
+    - Removes any obsolete JSON files for countries NOT in active_countries
+      to prevent PyPSA from aborting due to mismatch between selected_countries
+      and the files found in input/long_term_uc/countries/.
+    """
+    os.makedirs(countries_dir, exist_ok=True)
+    # 1. Write active country JSONs
+    for c in active_countries:
+        c_caps = country_capacities.get(c, {})
+        write_country_json(country=c, capacities=c_caps, countries_dir=countries_dir, target_year=target_year)
+
+    # 2. Clean up any country file in countries_dir that is not in active_countries
+    for fname in os.listdir(countries_dir):
+        if fname.endswith(".json"):
+            c_name = fname[:-5]
+            if c_name not in active_countries and c_name in AVAILABLE_COUNTRIES:
+                fpath = os.path.join(countries_dir, fname)
+                try:
+                    os.remove(fpath)
+                    logging.info(f"Cleaned up inactive country file {fpath}")
+                except OSError as exc:
+                    logging.warning(f"Could not remove {fpath}: {exc}")
 
 
 DEFAULT_PERIOD_START: str = "1900/1/1"
@@ -599,12 +642,11 @@ def resolve_simulation_period(
 
 def update_europe_params(mode: str = "europe", team: Optional[str] = None,
                          period_start: str = DEFAULT_PERIOD_START, period_end: str = DEFAULT_PERIOD_END,
+                         selected_countries: Optional[List[str]] = None,
                          europe_params_path: str = "input/long_term_uc/elec-europe_params_to-be-modif.json") -> None:
     """
-    Enforce and set 'mode' to 'europe', and configure the simulation period
-    (by default full year '1900/1/1' to '1901/1/1', or test period '1900/1/1' to '1900/1/15')
-    in elec-europe_params_to-be-modif.json.
-    The runner exclusively operates in European mode ('europe'). Solo mode is not supported for the runner.
+    Enforce and set 'mode' to 'europe', configure the simulation period,
+    and update 'selected_countries' to strictly match active participating countries.
     """
     if mode != "europe":
         raise ValueError(
@@ -632,13 +674,18 @@ def update_europe_params(mode: str = "europe", team: Optional[str] = None,
         if period_end and data.get("uc_period_end") != period_end:
             data["uc_period_end"] = period_end
             modified = True
+        if selected_countries is not None:
+            sorted_countries = sorted(selected_countries)
+            if data.get("selected_countries") != sorted_countries:
+                data["selected_countries"] = sorted_countries
+                modified = True
 
         if modified:
             with open(europe_params_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             logging.info(
                 f"Updated {europe_params_path}: mode='europe' team='{team or data.get('team')}' "
-                f"period=[{period_start} - {period_end}]"
+                f"period=[{period_start} - {period_end}] countries={data.get('selected_countries')}"
             )
     except Exception as e:
         logging.warning(f"Could not update {europe_params_path}: {e}")
@@ -2002,6 +2049,7 @@ def get_or_run_eraa_baseline(
     eraa_year: int,
     period_start: str,
     period_end: str,
+    countries: Optional[List[str]] = None,
     target_year: int = 2033,
     climatic_year: int = 1989,
     output_dir: str = "output/runner",
@@ -2010,15 +2058,18 @@ def get_or_run_eraa_baseline(
     sim_output_base_dir: str = "output/long_term_uc",
 ) -> Optional[dict]:
     """
-    Get or compute pure ERAA baseline simulation metrics for all 7 European countries.
+    Get or compute pure ERAA baseline simulation metrics for the active European countries.
     Uses cached result in output/runner/baselines/ if available.
     """
+    active_countries = sorted(countries) if countries is not None else AVAILABLE_COUNTRIES
+
     cache_path = get_eraa_baseline_cache_path(
         eraa_year=eraa_year,
         period_start=period_start,
         period_end=period_end,
         target_year=target_year,
         climatic_year=climatic_year,
+        countries=active_countries,
         output_dir=output_dir,
     )
 
@@ -2036,17 +2087,16 @@ def get_or_run_eraa_baseline(
         return None
 
     # Run PyPSA simulation for pure ERAA capacities
-    print(f"\n--- [CONFIGURING PURE ERAA {eraa_year} BASELINE] ({len(AVAILABLE_COUNTRIES)} countries) ---")
+    print(f"\n--- [CONFIGURING PURE ERAA {eraa_year} BASELINE] ({len(active_countries)} countries: {', '.join(active_countries)}) ---")
     eraa_capas = load_eraa_country_capacities(year=eraa_year)
-    for country in AVAILABLE_COUNTRIES:
-        c_capas = eraa_capas.get(country, {})
-        write_country_json(country=country, capacities=c_capas, target_year=target_year)
+    sync_country_json_files(active_countries=active_countries, country_capacities=eraa_capas, target_year=target_year)
 
     update_europe_params(
         mode="europe",
-        team=AVAILABLE_COUNTRIES[0],
+        team=active_countries[0],
         period_start=period_start,
         period_end=period_end,
+        selected_countries=active_countries,
     )
 
     pattern = os.path.join(sim_output_base_dir, "**", "uc-summary_*.json")
@@ -2073,7 +2123,7 @@ def get_or_run_eraa_baseline(
             summary_data=summary_data,
             per_country_capacities=eraa_capas,
             summary_file_path=summary_file,
-            countries=AVAILABLE_COUNTRIES,
+            countries=active_countries,
         )
         metrics["eraa_baseline_year"] = eraa_year
         metrics["target_year"] = target_year

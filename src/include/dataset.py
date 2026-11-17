@@ -1226,6 +1226,17 @@ class Dataset:
         if agg_warn_over_cases and len(aggreg_warning) > 0:
             print_out_agg_warning_gen_units_data(aggreg_warning=aggreg_warning)
 
+    def keep_only_gen_units_with_positive_p(self):
+        rm_units = []
+        for country, units_data in self.generation_units_data.items():
+            for unit_data in units_data:
+                if unit_data.p_nom == 0:
+                    self.generation_units_data[country].remove(unit_data)
+                    rm_units.append(unit_data.name)
+        if len(rm_units) > 0:
+            logging.info(f"The following prod units have been removed as they have zero capacity "
+                         f"('p_nom' attribute in PyPSA): {rm_units}")
+
     def update_gen_units_marginal_costs(self, fuel_sources: list[FuelSource]):
         """
         Update generation units data marginal cost/CO2 emissions factor based on fuel sources data

@@ -135,6 +135,9 @@ def get_needed_eraa_data(uc_run_params: UCRunParams, eraa_data_descr: ERAADatase
                                 units_complem_params_per_agg_pt=eraa_data_descr.units_complem_params_per_agg_pt)
      )
 
+    # keep only generators with p_nom > 0
+    eraa_dataset.keep_only_gen_units_with_positive_p()
+
     fuel_sources_with_modif_marg_cost = get_fuel_sources_with_set_marg_cost(fuel_sources)
     if len(fuel_sources_with_modif_marg_cost) > 0:
         eraa_dataset.update_gen_units_marginal_costs(fuel_sources=fuel_sources_with_modif_marg_cost)
